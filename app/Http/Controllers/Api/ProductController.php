@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use App\Models\Product;
 use App\Models\Tenants;
+use Illuminate\Support\Facades\Http;
 
 class ProductController extends Controller
 {
@@ -30,12 +31,14 @@ class ProductController extends Controller
                 ['data' => $requestData]
             );
 
+            $mappingProduct = $this->mappingProduct($product); 
+
             if ($product->shop_product_id !== null) {
-            	$this->updateProductToShopify($product);
+            	$response = $this->updateProductToShopify($mappingProduct, $product->shop_product_id);
             } else {
             	//$existSku = $this->checkSkuExistInShopify($product);
 
-            	$this->createProductToShopify($product);
+            	$response = $this->createProductToShopify($mappingProduct);
             }
 
             return response()->json(['message' => 'Product saved successfully'], 200);
@@ -45,19 +48,51 @@ class ProductController extends Controller
         }
     }
 
-    public function updateProductToShopify($product)
+    public function mappingProduct($product)
+    {
+    	$productMapping['sku'] = $product->sku;
+    	$productData = $product->data;
+
+    	if (!is_null($productData)) {
+    		$data = $productData['product'];
+    		$productMapping['data'] = [
+    			'title' => $data['nama'],
+    			'body_html' => $data['deskripsi'],
+    			'status' => strtolower($data['status'] == 'Enable' ? 'Active' : 'Inactive'),
+    			'images' => array_map(function ($image) {
+    				return [
+    					'src' => $image['image'],
+    					'position' => $image['position'],
+    					'alt' => $image['label'],
+    					'disabled' => $image['disabled'] == '0' ? false : true,
+    				];
+    			}, $data['gambar']),
+    			'variants' => [
+    				[
+    					'price' => $data['harga'],
+    					'sku' => $data['kode'],
+    					'title' => $data['nama'],
+    					'weight' => $data['berat'],
+    					'weight_unit' => 'kg',
+    				]
+    			]
+    		];
+    	}
+
+    	return $productMapping;
+    }
+
+    public function updateProductToShopify($product, $id)
     {
         $existingTenants = Tenants::first();
 
         if ($existingTenants) {
             $accessToken = $existingTenants->token;
             $shop = $existingTenants->domain;
-
-            $id = $product->shop_product_id;
             $domain = $existingTenants->domain;
             $token = $existingTenants->token;
 
-            $data = json_decode($product->data, true);
+            $data['product'] = $product['data'];
             $data['product']['id'] = (int)$id;
 
             // Make the API request to update the product
@@ -79,11 +114,10 @@ class ProductController extends Controller
             $domain = $existingTenants->domain;
             $token = $existingTenants->token;
 
-            $data = $product->data;
+            $data['product'] = $product['data'];
 
             // Make the API request to update the product
-            $response = $this->callRestApi($domain, $token, "/admin/api/2024-04/products/{$id}.json", $data, 'PUT');
-            $response = $this->callRestApi($domain, $token, '/admin/api/2021-04/products.json', $data, 'POST');
+            $response = $this->callRestApi($domain, $token, "/admin/api/2024-04/products.json", $data, 'POST');
 
             return $response;
         }
@@ -93,11 +127,11 @@ class ProductController extends Controller
 
     public function callRestApi($domain, $token, $endpoint, $query = [], $method = 'GET')
     {
-        $url = 'https://' . $shopUrl . $endpoint;
+        $url = 'https://' . $domain . $endpoint;
 
         $options = [
             'headers' => [
-                'X-Shopify-Access-Token' => $accessToken,
+                'X-Shopify-Access-Token' => $token,
             ],
             'timeout' => 60,
             'connect_timeout' => 60,
